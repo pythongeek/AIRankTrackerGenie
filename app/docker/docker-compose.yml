@@ -1,0 +1,194 @@
+version: '3.8'
+
+services:
+  # Supabase PostgreSQL Database
+  db:
+    image: supabase/postgres:15.1.0.147
+    container_name: ai-rank-tracker-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your-super-secret-password}
+      POSTGRES_DB: ai_rank_tracker
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-rank-tracker-network
+
+  # Supabase Auth (GoTrue)
+  auth:
+    image: supabase/gotrue:v2.145.0
+    container_name: ai-rank-tracker-auth
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-your-super-secret-password}@db:5432/ai_rank_tracker?sslmode=disable
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:5173}
+      GOTRUE_URI_ALLOW_LIST: "*"
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+    ports:
+      - "9999:9999"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - ai-rank-tracker-network
+
+  # Supabase Realtime
+  realtime:
+    image: supabase/realtime:v2.28.32
+    container_name: ai-rank-tracker-realtime
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-your-super-secret-password}
+      DB_NAME: ai_rank_tracker
+      DB_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token}
+      SECURE_CHANNELS: "false"
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - ai-rank-tracker-network
+
+  # PostgREST API
+  rest:
+    image: postgrest/postgrest:v12.0.1
+    container_name: ai-rank-tracker-rest
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD:-your-super-secret-password}@db:5432/ai_rank_tracker
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token}
+      PGRST_OPENAPI_SERVER_PROXY_URI: ${API_URL:-http://localhost:3001}
+    ports:
+      - "3001:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - ai-rank-tracker-network
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ai-rank-tracker-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai-rank-tracker-network
+
+  # Backend API Server
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ai-rank-tracker-api
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-your-super-secret-password}@db:5432/ai_rank_tracker
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token}
+      SUPABASE_URL: ${SUPABASE_URL:-http://localhost:3001}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-your-anon-key}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      SERP_API_KEY: ${SERP_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY}
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../backend:/app
+      - /app/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - ai-rank-tracker-network
+    command: npm run dev
+
+  # Frontend (Vite dev server)
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: ai-rank-tracker-frontend
+    environment:
+      VITE_API_URL: ${API_URL:-http://localhost:3000}
+      VITE_SUPABASE_URL: ${SUPABASE_URL:-http://localhost:3001}
+      VITE_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-your-anon-key}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../src:/app/src
+      - ../index.html:/app/index.html
+      - ../package.json:/app/package.json
+      - ../vite.config.ts:/app/vite.config.ts
+      - ../tailwind.config.js:/app/tailwind.config.js
+      - ../tsconfig.json:/app/tsconfig.json
+      - /app/node_modules
+    depends_on:
+      - api
+    networks:
+      - ai-rank-tracker-network
+    command: npm run dev -- --host 0.0.0.0
+
+  # BullMQ Worker for background jobs
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ai-rank-tracker-worker
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-your-super-secret-password}@db:5432/ai_rank_tracker
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      SERP_API_KEY: ${SERP_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY}
+      WORKER_MODE: "true"
+    volumes:
+      - ../backend:/app
+      - /app/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - ai-rank-tracker-network
+    command: npm run worker
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  ai-rank-tracker-network:
+    driver: bridge
