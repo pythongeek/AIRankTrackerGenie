@@ -219,7 +219,6 @@ router.post('/schedule', asyncHandler(async (req, res) => {
         jobs.push(jobResult.rows[0]);
       }
     }
-  }
 
   res.status(201).json({
     message: 'Tracking jobs scheduled',
