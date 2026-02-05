@@ -206,7 +206,7 @@ export class ScoringService {
    * Calculate momentum score (5% weight)
    * Based on week-over-week growth
    */
-  private async calculateMomentumScore(projectId: string): Promise<number {
+  private async calculateMomentumScore(projectId: string): Promise<number> {
     // Get this week's citations
     const thisWeekResult = await this.db.query(`
       SELECT COUNT(*) as count

@@ -224,8 +224,8 @@ router.post('/schedule', asyncHandler(async (req, res) => {
   res.status(201).json({
     message: 'Tracking jobs scheduled',
     jobsScheduled: jobs.length
-  }));
-}));
+  });
+});
 
 // Quick track (test tracking without storing)
 router.post('/quick-test', asyncHandler(async (req, res) => {
